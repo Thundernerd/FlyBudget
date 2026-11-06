@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { format } from 'date-fns';
+import { addDays, format } from 'date-fns';
 import {
   DATE_PRESETS,
   computeDateRange,
@@ -195,11 +195,10 @@ describe('short-range helpers (property-based)', () => {
           expect(b.to.slice(0, 7) <= to).toBe(true);
           // It stops early only at today; otherwise it's the last day of `to`
           if (b.to !== today)
-            expect(
-              format(new Date(`${b.to}T00:00:00`).getTime() + 86_400_000, 'yyyy-MM') > to,
-            ).toBe(true);
+            expect(format(addDays(new Date(`${b.to}T00:00:00`), 1), 'yyyy-MM') > to).toBe(true);
         },
       ),
+      { examples: [[332, 1, new Date(2027, 10, 1)]] },
     );
   });
 });
