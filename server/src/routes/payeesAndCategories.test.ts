@@ -4,8 +4,11 @@ import express from 'express';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
+import { nanoid } from 'nanoid';
 import { db } from '../db/index.js';
+import { transactions } from '../db/schema.js';
 import { errorHandler } from '../middleware/security.js';
+import { applyPayeeDefault } from '../services/ruleService.js';
 import { accountsRouter } from './accounts.js';
 import { categoriesRouter } from './categories.js';
 import { payeesRouter } from './payees.js';
@@ -109,6 +112,162 @@ describe('renaming a payee', () => {
     )!;
     await send('PUT', `/payees/${payee.id}`, { defaultCategoryId: null });
     expect((await list(`account_id=${accountId}`))[0].payeeName).toBe('Keeps Its Name');
+  });
+});
+
+describe("applying a payee's default category", () => {
+  const newPayee = async (defaultCategoryId: string | null = null) =>
+    (await send('POST', '/payees', { name: `Payee ${Math.random()}`, defaultCategoryId })).body
+      .id as string;
+  const preview = (payeeId: string, scope: string) =>
+    send('POST', `/payees/${payeeId}/default-category/preview`, { scope });
+  const apply = (payeeId: string, scope: string, transactionIds: string[]) =>
+    send('POST', `/payees/${payeeId}/default-category/apply`, { scope, transactionIds });
+
+  const addRow = (fields: Partial<typeof transactions.$inferInsert> & { accountId: string }) => {
+    const id = nanoid();
+    db.insert(transactions)
+      .values({ id, date: '2025-06-01', amount: -100, ...fields })
+      .run();
+    return id;
+  };
+  const allRows = () =>
+    Object.fromEntries(
+      db
+        .select()
+        .from(transactions)
+        .all()
+        .map((t) => [t.id, t]),
+    );
+
+  it('changes only eligible ticked rows of this payee, and only their category', async () => {
+    const accountId = await newAccount();
+    const defaultCategory = await newCategory('Default');
+    const otherCategory = await newCategory('Other');
+
+    const rowArb = fc.record({
+      kind: fc.constantFrom(
+        'open',
+        'reconciled',
+        'adjustment',
+        'transfer',
+        'splitParent',
+        'splitPart',
+        'otherPayee',
+      ),
+      category: fc.constantFrom(null, defaultCategory, otherCategory),
+      ticked: fc.boolean(),
+    });
+
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(rowArb, { minLength: 1, maxLength: 12 }),
+        fc.constantFrom('uncategorized', 'all'),
+        async (rows, scope) => {
+          const payeeId = await newPayee(defaultCategory);
+          const otherPayeeId = await newPayee(defaultCategory);
+          const transferPartner = addRow({ accountId, payeeId: otherPayeeId });
+          const splitWhole = addRow({ accountId, payeeId, isParent: 1 });
+
+          const flags = {
+            open: {},
+            reconciled: { reconciled: 1 },
+            adjustment: { isAdjustment: 1 },
+            transfer: { transferTransactionId: transferPartner },
+            splitParent: { isParent: 1 },
+            splitPart: { parentTransactionId: splitWhole },
+            otherPayee: { payeeId: otherPayeeId },
+          };
+          const seeded = rows.map((row) => ({
+            ...row,
+            id: addRow({ accountId, payeeId, categoryId: row.category, ...flags[row.kind] }),
+          }));
+          const eligible = seeded.filter(
+            (r) =>
+              r.kind === 'open' &&
+              r.category !== defaultCategory &&
+              (scope === 'all' || r.category === null),
+          );
+          const before = allRows();
+
+          const planned = (await preview(payeeId, scope)).body as {
+            transactionId: string;
+            changes: unknown;
+            next: unknown;
+          }[];
+          expect(planned.map((p) => p.transactionId).sort()).toEqual(
+            eligible.map((r) => r.id).sort(),
+          );
+          for (const p of planned) {
+            const row = before[p.transactionId];
+            expect(p.changes).toEqual({ category: { from: row.categoryId, to: defaultCategory } });
+            expect(p.next).toEqual({
+              payeeId: row.payeeId,
+              payeeName: row.payeeName,
+              categoryId: defaultCategory,
+              notes: row.notes,
+            });
+          }
+          expect(allRows()).toEqual(before);
+
+          const tickedIds = seeded.filter((r) => r.ticked).map((r) => r.id);
+          const applied = await apply(payeeId, scope, tickedIds);
+          const changed = eligible.filter((r) => r.ticked);
+          expect(applied.body).toEqual({ updated: changed.length });
+
+          const expected = structuredClone(before);
+          for (const r of changed) expected[r.id].categoryId = defaultCategory;
+          expect(allRows()).toEqual(expected);
+
+          expect((await apply(payeeId, scope, tickedIds)).body).toEqual({ updated: 0 });
+          expect(allRows()).toEqual(expected);
+        },
+      ),
+      { numRuns: 25 },
+    );
+  });
+
+  it('plans nothing for a payee without a default category', async () => {
+    const accountId = await newAccount();
+    const payeeId = await newPayee();
+    const id = addRow({ accountId, payeeId });
+
+    expect((await preview(payeeId, 'all')).body).toEqual([]);
+    expect((await apply(payeeId, 'all', [id])).body).toEqual({ updated: 0 });
+    expect(allRows()[id].categoryId).toBeNull();
+  });
+
+  it('plans nothing once the default category is deleted', async () => {
+    const accountId = await newAccount();
+    const category = await newCategory('Deleted');
+    const payeeId = await newPayee(category);
+    addRow({ accountId, payeeId });
+
+    await send('DELETE', `/categories/${category}`);
+
+    expect((await preview(payeeId, 'all')).body).toEqual([]);
+  });
+
+  it('answers 404 for an unknown payee and 400 for an invalid body', async () => {
+    expect((await preview('missing', 'all')).status).toBe(404);
+    expect((await apply('missing', 'all', [])).status).toBe(404);
+
+    const payeeId = await newPayee();
+    expect((await preview(payeeId, 'everything')).status).toBe(400);
+    expect((await send('POST', `/payees/${payeeId}/default-category/apply`, {})).status).toBe(400);
+  });
+
+  it('handles more ticked ids than SQLite allows variables', async () => {
+    const accountId = await newAccount();
+    const category = await newCategory('Many');
+    const payeeId = await newPayee(category);
+    const id = addRow({ accountId, payeeId });
+    const unrelatedIds = Array.from({ length: 40_000 }, (_, i) => `unrelated-${i}`);
+
+    expect(
+      applyPayeeDefault({ payeeId, scope: 'all', transactionIds: [...unrelatedIds, id] }),
+    ).toBe(1);
+    expect(allRows()[id].categoryId).toBe(category);
   });
 });
 

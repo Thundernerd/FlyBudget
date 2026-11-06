@@ -4,6 +4,7 @@ import { payees, transactions } from '../db/schema.js';
 import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
+import { applyPayeeDefault, planPayeeDefault } from '../services/ruleService.js';
 import { logoSchema } from '../utils/logo.js';
 
 export const payeesRouter = Router();
@@ -19,6 +20,15 @@ const mergeSchema = z.object({
   keepId: z.string(),
   mergeIds: z.array(z.string().max(64)).min(1).max(10_000),
 });
+
+const defaultCategoryPreviewSchema = z.object({ scope: z.enum(['uncategorized', 'all']) });
+
+const defaultCategoryApplySchema = defaultCategoryPreviewSchema.extend({
+  transactionIds: z.array(z.string().min(1).max(64)).max(100_000),
+});
+
+const payeeExists = (id: string) =>
+  !!db.select({ id: payees.id }).from(payees).where(eq(payees.id, id)).get();
 
 payeesRouter.get('/', (_req, res) => {
   const rows = db.select().from(payees).all();
@@ -88,6 +98,22 @@ payeesRouter.post('/merge', (req, res) => {
   });
 
   res.json({ merged: mergeIds.length });
+});
+
+payeesRouter.post('/:id/default-category/preview', (req, res) => {
+  const parsed = defaultCategoryPreviewSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!payeeExists(req.params.id)) return res.status(404).json({ error: 'Not found' });
+
+  res.json(planPayeeDefault({ payeeId: req.params.id, ...parsed.data }));
+});
+
+payeesRouter.post('/:id/default-category/apply', (req, res) => {
+  const parsed = defaultCategoryApplySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!payeeExists(req.params.id)) return res.status(404).json({ error: 'Not found' });
+
+  res.json({ updated: applyPayeeDefault({ payeeId: req.params.id, ...parsed.data }) });
 });
 
 payeesRouter.put('/:id', (req, res) => {

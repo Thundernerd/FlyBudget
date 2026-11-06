@@ -210,6 +210,7 @@ type PlanOptions = {
   scope: ApplyScope;
   /** Limit to these transactions (the ones the user ticked in the preview) */
   transactionIds?: string[];
+  payeeId?: string;
 };
 
 export type PlannedChange = {
@@ -252,6 +253,7 @@ function candidates(opts: PlanOptions): TxRow[] {
     eq(transactions.isAdjustment, 0),
   ];
   if (opts.scope === 'uncategorized') where.push(isNull(transactions.categoryId));
+  if (opts.payeeId) where.push(eq(transactions.payeeId, opts.payeeId));
   if (opts.transactionIds) {
     if (!opts.transactionIds.length) return [];
     where.push(inArray(transactions.id, opts.transactionIds));
@@ -355,6 +357,56 @@ export function applyRules(opts: PlanOptions & { transactionIds: string[] }): nu
       }
       // The parts share the whole's budget-currency value
       if (split) refreshMainAmounts([t.id]);
+    }
+  });
+  return plan.length;
+}
+
+type PayeeDefaultOptions = {
+  payeeId: string;
+  scope: ApplyScope;
+  transactionIds?: string[];
+};
+
+export function planPayeeDefault({
+  payeeId,
+  scope,
+  transactionIds,
+}: PayeeDefaultOptions): PlannedChange[] {
+  const payee = db.select().from(payees).where(eq(payees.id, payeeId)).get();
+  const defaultCategoryId = payee?.defaultCategoryId;
+  if (!defaultCategoryId) return [];
+
+  // Filtered here, not in SQL: up to 100k ticked ids is more than SQLite allows as variables
+  const ticked = transactionIds && new Set(transactionIds);
+  return candidates({ payeeId, scope })
+    .filter((t) => t.categoryId !== defaultCategoryId && (!ticked || ticked.has(t.id)))
+    .map((t) => ({
+      transactionId: t.id,
+      date: t.date,
+      accountId: t.accountId,
+      amount: t.amount,
+      payeeName: t.payeeName,
+      changes: { category: { from: t.categoryId, to: defaultCategoryId } },
+      next: {
+        payeeId: t.payeeId,
+        payeeName: t.payeeName,
+        categoryId: defaultCategoryId,
+        notes: t.notes,
+      },
+    }));
+}
+
+export function applyPayeeDefault(
+  opts: PayeeDefaultOptions & { transactionIds: string[] },
+): number {
+  const plan = planPayeeDefault(opts);
+  db.transaction(() => {
+    for (const p of plan) {
+      db.update(transactions)
+        .set({ categoryId: p.next.categoryId })
+        .where(eq(transactions.id, p.transactionId))
+        .run();
     }
   });
   return plan.length;
