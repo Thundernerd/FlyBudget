@@ -243,13 +243,13 @@ const txState = (t: TxRow): TxState => ({
   categoryId: t.categoryId,
 });
 
-/** Transactions rules may change: not reconciled, not transfers, not split (parents or children) */
 function candidates(opts: PlanOptions): TxRow[] {
   const where = [
     ne(transactions.reconciled, 1),
     isNull(transactions.transferTransactionId),
     isNull(transactions.parentTransactionId),
     eq(transactions.isParent, 0),
+    eq(transactions.isAdjustment, 0),
   ];
   if (opts.scope === 'uncategorized') where.push(isNull(transactions.categoryId));
   if (opts.transactionIds) {

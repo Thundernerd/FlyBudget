@@ -347,4 +347,65 @@ describe('rules on existing transactions', () => {
     // Split transactions are left alone afterwards
     expect(await json('POST', '/rules/preview', { scope: 'all', ruleIds: [rule.id] })).toEqual([]);
   });
+
+  describe.each(['uncategorized', 'all'] as const)('balance corrections, %s scope', (scope) => {
+    const addAdjustment = async (fields: object): Promise<string> =>
+      (
+        await json('POST', '/transactions', {
+          accountId: ACCOUNT,
+          date: '2026-09-02',
+          amount: -100,
+          adjustment: true,
+          ...fields,
+        })
+      ).id;
+
+    let adjustmentIds: string[];
+
+    beforeEach(async () => {
+      await addRule({
+        conditions: [{ field: 'payee_name', op: 'starts_with', value: 'starbucks' }],
+        actions: [{ type: 'set_category', value: COFFEE }],
+      });
+      await importRows([{ payeeName: 'Target', amount: -300 }]);
+      db.update(transactions)
+        .set({ categoryId: null })
+        .where(eq(transactions.importedPayee, 'Target'))
+        .run();
+
+      const matchedByRule = await addAdjustment({ payeeName: 'Starbucks correction' });
+      const payeeHasDefault = await addAdjustment({ payeeId: 'target' });
+      const alreadyCategorized = await addAdjustment({
+        payeeName: 'Starbucks correction',
+        categoryId: GROCERIES,
+      });
+      adjustmentIds = [matchedByRule, payeeHasDefault, alreadyCategorized];
+    });
+
+    const adjustmentCategories = () =>
+      adjustmentIds.map(
+        (id) => db.select().from(transactions).where(eq(transactions.id, id)).get()!.categoryId,
+      );
+
+    it('leaves them out of the preview, while listing ordinary rows', async () => {
+      const preview: Array<{ transactionId: string; payeeName: string }> = await json(
+        'POST',
+        '/rules/preview',
+        { scope },
+      );
+      expect(preview.map((p) => p.payeeName).sort()).toEqual([
+        'Starbucks 1',
+        'Starbucks 2',
+        'Target',
+      ]);
+      expect(preview.filter((p) => adjustmentIds.includes(p.transactionId))).toEqual([]);
+    });
+
+    it('does not change them when their ids are sent to apply', async () => {
+      expect(await json('POST', '/rules/apply', { scope, transactionIds: adjustmentIds })).toEqual({
+        updated: 0,
+      });
+      expect(adjustmentCategories()).toEqual([null, null, GROCERIES]);
+    });
+  });
 });
