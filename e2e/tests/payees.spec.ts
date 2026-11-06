@@ -91,6 +91,94 @@ test.describe('payees', () => {
     expect(tx.categoryId).toBe(shopping.id);
   });
 
+  const applyDefaultButton = (name: string) => ({
+    name: `Apply default category to existing transactions for ${name}`,
+  });
+
+  test('applies a default category to the existing transactions ticked in the preview', async ({
+    page,
+    api,
+  }) => {
+    const checking = await api.createAccount('Checking', 100_000);
+    const groceries = await api.category('Groceries');
+    const electric = await api.category('Electric');
+    const addAmazon = (amount: number, categoryId?: string) =>
+      api.createTransaction({
+        accountId: checking.id,
+        date: isoDay(),
+        amount,
+        payeeName: 'Amazon',
+        categoryId,
+      });
+    await addAmazon(-500);
+    await addAmazon(-700);
+    await addAmazon(-900, electric.id);
+    const amazon = (await api.call<any[]>('GET', '/payees')).find((p) => p.name === 'Amazon');
+    await api.call('PUT', `/payees/${amazon.id}`, { defaultCategoryId: groceries.id });
+
+    const nav = page.getByRole('navigation');
+    const groceriesRow = page.getByRole('row').filter({ hasText: 'Groceries' }).first();
+    await open(page, '/transactions');
+    await expect(page.getByRole('button', { name: /Electric$/ })).toBeVisible();
+    await nav.getByRole('link', { name: 'Budget', exact: true }).click();
+    await expect(groceriesRow).toBeVisible();
+    await nav.getByRole('link', { name: 'Payees', exact: true }).click();
+
+    await page.getByRole('button', applyDefaultButton('Amazon')).click();
+    const dialog = page.getByRole('dialog', { name: /Apply ".*Groceries" to Amazon/ });
+    const skip = dialog.getByRole('checkbox', {
+      name: 'Skip transactions that already have a category',
+    });
+    const include = dialog.getByRole('checkbox', { name: 'Include this transaction' });
+    const previewRow = (amount: string) => dialog.getByRole('row').filter({ hasText: amount });
+
+    await expect(skip).toBeChecked();
+    await expect(include).toHaveCount(2);
+    await expect(previewRow('-$9')).toBeHidden();
+
+    await skip.uncheck();
+    await expect(include).toHaveCount(3);
+    await expect(previewRow('-$9')).toContainText(/Category.*Electric.*Groceries/);
+
+    await skip.check();
+    await expect(include).toHaveCount(2);
+    await previewRow('-$7').getByRole('checkbox', { name: 'Include this transaction' }).uncheck();
+    await dialog.getByRole('button', { name: 'Apply to 1 transaction' }).click();
+    await expect(dialog).toContainText('Updated 1 transaction');
+    await dialog.getByRole('button', { name: 'Done' }).click();
+
+    const transactions = await api.transactions();
+    const categoryOf = (amount: number) => transactions.find((t) => t.amount === amount).categoryId;
+    expect(categoryOf(-500)).toBe(groceries.id);
+    expect(categoryOf(-700)).toBeNull();
+    expect(categoryOf(-900)).toBe(electric.id);
+
+    await nav.getByRole('link', { name: 'Budget', exact: true }).click();
+    await expect(groceriesRow).toContainText('$5');
+    await nav.getByRole('link', { name: 'Transactions', exact: true }).click();
+    await expect(page.getByRole('button', { name: /Groceries$/ })).toHaveCount(1);
+  });
+
+  test('offers applying a default category only when there is something to apply it to', async ({
+    page,
+    api,
+  }) => {
+    await seed(api);
+    const groceries = await api.category('Groceries');
+    await api.call('POST', '/payees', { name: 'Unused', defaultCategoryId: groceries.id });
+
+    await open(page, '/payees');
+    await expect(row(page, 'Amazon')).toBeVisible();
+    await expect(row(page, 'Unused')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Apply default category/ })).toHaveCount(0);
+
+    await page
+      .getByRole('combobox', { name: 'Default category for Amazon' })
+      .selectOption(groceries.id);
+    await expect(page.getByRole('button', applyDefaultButton('Amazon'))).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Apply default category/ })).toHaveCount(1);
+  });
+
   test('renames a payee in place', async ({ page, api }) => {
     await seed(api);
     await open(page, '/payees');
