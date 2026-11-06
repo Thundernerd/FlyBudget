@@ -6,6 +6,7 @@ import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { eq, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { accounts, categories, categoryGroups, payees, rules, transactions } from '../db/schema.js';
+import { applyRules } from '../services/ruleService.js';
 import { rulesRouter } from './rules.js';
 import { transactionsRouter } from './transactions.js';
 
@@ -346,6 +347,19 @@ describe('rules on existing transactions', () => {
     expect(children.map((c) => c.amount)).toEqual([-250, -250]);
     // Split transactions are left alone afterwards
     expect(await json('POST', '/rules/preview', { scope: 'all', ruleIds: [rule.id] })).toEqual([]);
+  });
+
+  it('applies when more transactions are ticked than SQLite allows variables', async () => {
+    await addRule({
+      conditions: [{ field: 'payee_name', op: 'starts_with', value: 'starbucks' }],
+      actions: [{ type: 'set_category', value: COFFEE }],
+    });
+    const id = tx('Starbucks 1').id;
+    const unrelatedIds = Array.from({ length: 40_000 }, (_, i) => `unrelated-${i}`);
+
+    expect(applyRules({ scope: 'all', transactionIds: [...unrelatedIds, id] })).toBe(1);
+    expect(tx('Starbucks 1').categoryId).toBe(COFFEE);
+    expect(tx('Starbucks 2').categoryId).toBeNull();
   });
 
   describe.each(['uncategorized', 'all'] as const)('balance corrections, %s scope', (scope) => {

@@ -1,6 +1,6 @@
 import { db } from '../db/index.js';
 import { categories, payees, rules, transactions } from '../db/schema.js';
-import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import {
   computeSplitAmounts,
@@ -254,16 +254,16 @@ function candidates(opts: PlanOptions): TxRow[] {
   ];
   if (opts.scope === 'uncategorized') where.push(isNull(transactions.categoryId));
   if (opts.payeeId) where.push(eq(transactions.payeeId, opts.payeeId));
-  if (opts.transactionIds) {
-    if (!opts.transactionIds.length) return [];
-    where.push(inArray(transactions.id, opts.transactionIds));
-  }
-  return db
+  if (opts.transactionIds?.length === 0) return [];
+  const rows = db
     .select()
     .from(transactions)
     .where(and(...where))
     .orderBy(desc(transactions.date))
     .all();
+  // Filtered here, not in SQL: up to 100k ticked ids is more than SQLite allows as variables
+  const ticked = opts.transactionIds && new Set(opts.transactionIds);
+  return ticked ? rows.filter((t) => ticked.has(t.id)) : rows;
 }
 
 /** Dry run: what running rules over existing transactions would change */
@@ -377,10 +377,8 @@ export function planPayeeDefault({
   const defaultCategoryId = payee?.defaultCategoryId;
   if (!defaultCategoryId) return [];
 
-  // Filtered here, not in SQL: up to 100k ticked ids is more than SQLite allows as variables
-  const ticked = transactionIds && new Set(transactionIds);
-  return candidates({ payeeId, scope })
-    .filter((t) => t.categoryId !== defaultCategoryId && (!ticked || ticked.has(t.id)))
+  return candidates({ payeeId, scope, transactionIds })
+    .filter((t) => t.categoryId !== defaultCategoryId)
     .map((t) => ({
       transactionId: t.id,
       date: t.date,
