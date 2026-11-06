@@ -237,7 +237,7 @@ test.describe('payees', () => {
     await expect(cards).toContainText('2 transactions');
 
     // Delete from the menu
-    await page.getByRole('button', { name: 'Actions for Corner Grocery' }).click();
+    await page.getByRole('button', { name: 'Actions for Corner Grocery', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Delete' }).click();
     await page
       .getByRole('dialog', { name: 'Delete Payee' })

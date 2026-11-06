@@ -14,6 +14,7 @@ import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { Modal, useModalValue } from '../components/ui/Modal';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
+import { ApplyPayeeDefaultModal } from '../components/payees/ApplyPayeeDefaultModal';
 import { PayeeIcon } from '../components/payees/PayeeIcon';
 import RowMenu from '../components/ui/RowMenu';
 import { useIsPhone } from '../hooks/useIsPhone';
@@ -65,6 +66,26 @@ function SortHeader({
         <Icon size={12} aria-hidden className={active ? '' : 'opacity-40'} />
       </button>
     </th>
+  );
+}
+
+function ApplyDefaultButton({
+  payee,
+  onClick,
+}: {
+  payee: PayeeWithCount;
+  onClick: (payee: PayeeWithCount) => void;
+}) {
+  if (!payee.defaultCategoryId || payee.transactionCount === 0) return null;
+  return (
+    <Button
+      variant="secondary"
+      size="sm"
+      aria-label={`Apply default category to existing transactions for ${payee.name}`}
+      onClick={() => onClick(payee)}
+    >
+      Apply to existing
+    </Button>
   );
 }
 
@@ -149,6 +170,8 @@ export default function PayeesPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showMerge, setShowMerge] = useState(false);
   const mergeModal = useModalValue(showMerge);
+  const [applyDefaultPayee, setApplyDefaultPayee] = useState<PayeeWithCount | null>(null);
+  const applyDefaultModal = useModalValue(applyDefaultPayee);
 
   const allCategories = useMemo(
     () =>
@@ -360,6 +383,7 @@ export default function PayeesPage() {
                     </option>
                   ))}
                 </select>
+                <ApplyDefaultButton payee={p} onClick={setApplyDefaultPayee} />
               </li>
             ))}
           </ul>
@@ -447,19 +471,22 @@ export default function PayeesPage() {
                       </div>
                     </td>
                     <td className="px-4 py-2">
-                      <select
-                        aria-label={`Default category for ${p.name}`}
-                        value={p.defaultCategoryId ?? ''}
-                        onChange={(e) => handleCategoryChange(p.id, e.target.value)}
-                        className="text-sm border border-border rounded-md px-2 py-1 bg-surface text-text focus:outline-none focus:ring-1 focus:ring-brand-600 max-w-[220px]"
-                      >
-                        <option value="">No default</option>
-                        {allCategories.map((c: any) => (
-                          <option key={c.id} value={c.id}>
-                            {c.groupName} → {c.name}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="flex items-center gap-2">
+                        <select
+                          aria-label={`Default category for ${p.name}`}
+                          value={p.defaultCategoryId ?? ''}
+                          onChange={(e) => handleCategoryChange(p.id, e.target.value)}
+                          className="text-sm border border-border rounded-md px-2 py-1 bg-surface text-text focus:outline-none focus:ring-1 focus:ring-brand-600 max-w-[220px]"
+                        >
+                          <option value="">No default</option>
+                          {allCategories.map((c: any) => (
+                            <option key={c.id} value={c.id}>
+                              {c.groupName} → {c.name}
+                            </option>
+                          ))}
+                        </select>
+                        <ApplyDefaultButton payee={p} onClick={setApplyDefaultPayee} />
+                      </div>
                     </td>
                     <td className="px-4 py-2 text-right text-sm text-text-secondary">
                       {p.transactionCount}
@@ -488,6 +515,15 @@ export default function PayeesPage() {
           payees={payees}
           onMerge={handleMerge}
           onClose={() => setShowMerge(false)}
+        />
+      )}
+
+      {applyDefaultModal.value && (
+        <ApplyPayeeDefaultModal
+          key={applyDefaultModal.value.id}
+          isOpen={applyDefaultModal.isOpen}
+          payee={applyDefaultModal.value}
+          onClose={() => setApplyDefaultPayee(null)}
         />
       )}
 

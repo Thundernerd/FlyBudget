@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { PayeeWithCount } from '../types';
+import type { PayeeWithCount, RuleApplyScope, RulePreviewItem } from '../types';
 
 export const getPayees = () => apiFetch<PayeeWithCount[]>('/payees');
 export const createPayee = (name: string, defaultCategoryId?: string | null) =>
@@ -16,4 +16,17 @@ export const mergePayees = (keepId: string, mergeIds: string[]) =>
   apiFetch<{ merged: number }>('/payees/merge', {
     method: 'POST',
     body: JSON.stringify({ keepId, mergeIds }),
+  });
+export const previewPayeeDefault = (id: string, scope: RuleApplyScope) =>
+  apiFetch<RulePreviewItem[]>(`/payees/${id}/default-category/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ scope }),
+  });
+export const applyPayeeDefault = (
+  id: string,
+  target: { scope: RuleApplyScope; transactionIds: string[] },
+) =>
+  apiFetch<{ updated: number }>(`/payees/${id}/default-category/apply`, {
+    method: 'POST',
+    body: JSON.stringify(target),
   });

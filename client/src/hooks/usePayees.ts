@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as payeesApi from '../api/payees';
 import { useUndoStore } from '../store/undoStore';
-import type { PayeeWithCount } from '../types';
+import type { PayeeWithCount, RuleApplyScope } from '../types';
 
 const QK = ['payees'];
 
@@ -111,6 +111,26 @@ export function useMergePayees() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: QK });
       qc.invalidateQueries({ queryKey: ['transactions'] });
+    },
+  });
+}
+
+export function useApplyPayeeDefault() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...target
+    }: {
+      id: string;
+      scope: RuleApplyScope;
+      transactionIds: string[];
+    }) => payeesApi.applyPayeeDefault(id, target),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      qc.invalidateQueries({ queryKey: ['budget'] });
+      qc.invalidateQueries({ queryKey: QK });
+      qc.invalidateQueries({ queryKey: ['reports'] });
     },
   });
 }
