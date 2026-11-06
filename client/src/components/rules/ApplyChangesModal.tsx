@@ -4,6 +4,7 @@ import { ArrowRight } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { useCanSave } from '../../hooks/useConnection';
+import { useIsPhone } from '../../hooks/useIsPhone';
 import { SavingPausedHint } from '../connection/SavingPausedHint';
 import { useRuleLookups } from './useRuleLookups';
 import { formatCurrency } from '../../utils/currency';
@@ -45,6 +46,7 @@ export function ApplyChangesModal({
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [done, setDone] = useState<number | null>(null);
   const canSave = useCanSave();
+  const isPhone = useIsPhone();
   const { lookups } = useRuleLookups();
 
   const { data: items, isLoading } = useQuery({
@@ -69,6 +71,10 @@ export function ApplyChangesModal({
       else next.add(id);
       return next;
     });
+  }
+
+  function toggleAll() {
+    setExcluded(allOn ? new Set(items?.map((i) => i.transactionId)) : new Set());
   }
 
   function handleApply() {
@@ -143,6 +149,48 @@ export function ApplyChangesModal({
               Nothing to change: no {scope === 'uncategorized' ? 'uncategorized ' : ''}transactions
               would be updated.
             </p>
+          ) : isPhone ? (
+            <div className="rounded-lg border border-border-light overflow-hidden">
+              <label className="flex items-center gap-3 min-h-11 px-3 bg-surface-alt border-b border-border-light text-xs text-text-tertiary">
+                <input
+                  type="checkbox"
+                  checked={allOn}
+                  onChange={toggleAll}
+                  className="h-5 w-5 accent-brand-600"
+                />
+                Select all
+              </label>
+              <ul className="max-h-[50vh] overflow-y-auto divide-y divide-border-light">
+                {items.map((item) => (
+                  <li
+                    key={item.transactionId}
+                    onClick={() => toggle(item.transactionId)}
+                    className={`flex items-start gap-3 min-h-11 px-3 py-2 text-xs cursor-pointer ${excluded.has(item.transactionId) ? 'opacity-50' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!excluded.has(item.transactionId)}
+                      onChange={() => toggle(item.transactionId)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-5 w-5 shrink-0 accent-brand-600"
+                      aria-label="Include this transaction"
+                    />
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      <div className="flex justify-between gap-2">
+                        <span className="truncate font-medium text-text">
+                          {item.payeeName ?? '—'}
+                        </span>
+                        <span className="tabular-nums text-text whitespace-nowrap">
+                          {formatCurrency(item.amount)}
+                        </span>
+                      </div>
+                      <div className="text-text-tertiary">{formatDay(item.date)}</div>
+                      <Changes item={item} category={category} />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : (
             <div className="rounded-lg border border-border-light overflow-hidden">
               <div className="max-h-[50vh] overflow-y-auto">
@@ -153,11 +201,7 @@ export function ApplyChangesModal({
                         <input
                           type="checkbox"
                           checked={allOn}
-                          onChange={() =>
-                            setExcluded(
-                              allOn ? new Set(items.map((i) => i.transactionId)) : new Set(),
-                            )
-                          }
+                          onChange={toggleAll}
                           className="accent-brand-600"
                           aria-label="Select all"
                         />

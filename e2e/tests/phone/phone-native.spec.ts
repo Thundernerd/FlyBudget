@@ -246,6 +246,60 @@ test.describe('payees', () => {
     await expect(cards).toHaveCount(0);
   });
 
+  test('applies a default category from a card, in a sheet that fits the screen', async ({
+    page,
+    api,
+  }) => {
+    const { checking, groceries } = await seedAccount(api);
+    const electric = await api.category('Electric');
+    await api.createTransaction({
+      accountId: checking.id,
+      date: isoDay(),
+      amount: -500,
+      payeeName: 'Streamflix',
+      categoryId: electric.id,
+    });
+    const streamflix = (await api.call<any[]>('GET', '/payees')).find(
+      (p) => p.name === 'Streamflix',
+    );
+    await api.call('PUT', `/payees/${streamflix.id}`, { defaultCategoryId: groceries.id });
+
+    await open(page, '/payees');
+    const button = page.getByRole('button', {
+      name: 'Apply default category to existing transactions for Streamflix',
+    });
+    await expectTouchSize(button);
+    await button.click();
+
+    const sheet = page.getByRole('dialog', { name: /Apply ".*Groceries" to Streamflix/ });
+    await expectBottomSheet(page, sheet);
+    await sheet
+      .getByRole('checkbox', { name: 'Skip transactions that already have a category' })
+      .uncheck();
+    const include = sheet.getByRole('checkbox', { name: 'Include this transaction' });
+    await expect(include).toHaveCount(2);
+    await expectTouchSize(sheet.getByRole('listitem').first());
+
+    const newCategories = sheet.getByText(/Groceries$/);
+    await expect(newCategories).toHaveCount(2);
+    for (const newCategory of await newCategories.all()) {
+      const box = (await newCategory.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    }
+
+    await sheet
+      .getByRole('listitem')
+      .filter({ hasText: 'Electric' })
+      .getByRole('checkbox', { name: 'Include this transaction' })
+      .uncheck();
+    await sheet.getByRole('button', { name: 'Apply to 1 transaction' }).click();
+    await expect(sheet).toContainText('Updated 1 transaction');
+
+    const categories = (await api.transactions()).filter((t) => t.payeeName === 'Streamflix');
+    expect(categories.find((t) => t.amount === -1_999).categoryId).toBe(groceries.id);
+    expect(categories.find((t) => t.amount === -500).categoryId).toBe(electric.id);
+  });
+
   test('sorts the cards from a menu and remembers the choice', async ({ page, api }) => {
     const { checking } = await seedAccount(api);
     await api.createTransaction({
